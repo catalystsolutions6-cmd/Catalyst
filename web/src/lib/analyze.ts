@@ -3,6 +3,8 @@
  *
  * Get a free key at https://aistudio.google.com/apikey and set GEMINI_API_KEY.
  * Optional env:
+ *   GROQ_API_KEY  optional free backup AI (https://console.groq.com/keys) used when Gemini is busy or out of quota
+ *   GROQ_MODEL    (default "qwen/qwen3.8-27b")
  *   GEMINI_MODEL  (default "gemini-flash-latest", Google's alias for the newest Flash model;
  *                  if that name is unavailable, picks the newest Flash model the key can use)
  * Uses the Gemini REST API directly (no SDK). Depends only on zod.
@@ -163,20 +165,33 @@ async function callGemini(model: string, key: string, mediaType: SupportedMedia,
 }
 
 export async function analyzeProductImage(input: { bytes: Buffer; mediaType: string }): Promise<ListingDraft> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new AnalyzeError("AI is not configured (GEMINI_API_KEY missing)", 503);
-
   const mediaType = input.mediaType.toLowerCase().replace("image/jpg", "image/jpeg");
   if (!SUPPORTED_MEDIA.includes(mediaType as SupportedMedia)) {
     throw new AnalyzeError(`Unsupported image type: ${input.mediaType}`, 415);
   }
   if (input.bytes.length === 0) throw new AnalyzeError("Empty image", 400);
   if (input.bytes.length > MAX_BYTES) throw new AnalyzeError("Image is larger than 5 MB, please resize before upload", 413);
-
   const base64 = input.bytes.toString("base64");
   const media = mediaType as SupportedMedia;
-  // Vercel stops the function at 60 s, so keep every attempt inside one 55 s budget.
-  const deadline = Date.now() + 55_000;
+
+  const gemini = process.env.GEMINI_API_KEY;
+  const groq = process.env.GROQ_API_KEY;
+  if (!gemini && !groq) throw new AnalyzeError("AI is not configured (set GEMINI_API_KEY)", 503);
+  // Vercel stops the function at 60 s. With a backup AI configured, leave it ~17 s.
+  const start = Date.now();
+  if (gemini) {
+    try {
+      return await analyzeWithGemini(gemini, media, base64, start + (groq ? 38_000 : 55_000));
+    } catch (e) {
+      const fallbackWorthy = e instanceof AnalyzeError && [429, 502, 503, 504].includes(e.status);
+      if (!groq || !fallbackWorthy) throw e;
+      console.warn("Gemini failed, trying Groq:", (e as Error).message);
+    }
+  }
+  return analyzeWithGroq(groq!, media, base64, start + 56_000);
+}
+
+async function analyzeWithGemini(key: string, media: SupportedMedia, base64: string, deadline: number): Promise<ListingDraft> {
   const left = () => deadline - Date.now();
   // 429 is per model on the free tier, so another model may still have quota left.
   const retryable = (st: number) => st === 404 || st === 429 || st === 500 || st === 503 || st === 504;
@@ -218,9 +233,14 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   if (data.promptFeedback?.blockReason) throw new AnalyzeError("This photo could not be processed, please fill the listing manually", 422);
 
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return toDraft(text);
+}
+
+/** Validates the model's JSON and turns it into a ListingDraft. */
+function toDraft(text: string): ListingDraft {
   let parsed;
   try {
-    parsed = DraftSchema.safeParse(JSON.parse(text));
+    parsed = DraftSchema.safeParse(JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")));
   } catch {
     parsed = null;
   }
@@ -243,4 +263,45 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
     specs,
     confidence: Math.max(0, Math.min(1, out.confidence)),
   };
+}
+
+// ---- Optional backup: Groq (free tier, OpenAI-compatible API). Used only if GROQ_API_KEY is set
+// and Gemini is busy, out of free quota, or slow. Free key: https://console.groq.com/keys
+async function analyzeWithGroq(key: string, media: SupportedMedia, base64: string, deadline: number): Promise<ListingDraft> {
+  const model = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
+  const shape = `Reply with only a JSON object with exactly these keys: is_product (boolean), title (string), description (string), category_slug (one of: ${CATEGORY_SLUGS.join(", ")}), brand (string), model (string), condition ("new" | "used" | "refurbished"), specs (array of {"name": string, "value": string}), confidence (number 0-1).`;
+  let res: Response;
+  try {
+    res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(Math.max(5_000, deadline - Date.now())),
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: `${SYSTEM_PROMPT}\n\n${shape}` },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Draft the listing for this product photo." },
+              { type: "image_url", image_url: { url: `data:${media};base64,${base64}` } },
+            ],
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
+    throw new AnalyzeError("Could not reach the AI service, please try again", 502);
+  }
+  const data = (await res.json().catch(() => ({}))) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
+  if (res.status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
+  if (res.status === 401 || res.status === 403) throw new AnalyzeError("Backup AI key is invalid (check GROQ_API_KEY)", 503);
+  if (!res.ok) {
+    console.error("Groq error", res.status, data.error);
+    throw new AnalyzeError(`AI service error, please try again (Groq ${res.status}: ${(data.error?.message || "").slice(0, 160)})`, 502);
+  }
+  return toDraft(data.choices?.[0]?.message?.content ?? "");
 }

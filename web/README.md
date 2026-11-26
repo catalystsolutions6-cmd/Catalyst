@@ -40,6 +40,8 @@ brand, model, condition and specs. Gemini's free tier needs no card: create a ke
 https://aistudio.google.com/apikey and set `GEMINI_API_KEY`. Without a key the analyze endpoint returns 503 and the
 shopkeeper fills the listing in by hand. The free tier has daily limits (see https://aistudio.google.com/rate-limit);
 when they run out the app shows "Free AI limit reached" and the shopkeeper can type the details.
+Optional free backup: set `GROQ_API_KEY` (https://console.groq.com/keys). When Gemini is busy, slow or out of quota,
+the same request is sent to Groq's vision model (`GROQ_MODEL`, default `qwen/qwen3.8-27b`).
 
 ## Product photo storage
 Photos uploaded from the shopkeeper app are stored by `src/lib/uploads.ts`, which picks a backend from the environment:
@@ -63,6 +65,7 @@ Environment variables:
 | `DATABASE_URL` | Added automatically when you connect a Neon database (Vercel → Storage → Neon, free plan) |
 | `BLOB_READ_WRITE_TOKEN` | Added automatically when you connect a Blob store (Vercel → Storage → Blob) |
 | `GEMINI_API_KEY` | Free key from https://aistudio.google.com/apikey |
+| `GROQ_API_KEY` | Optional free backup AI key from https://console.groq.com/keys |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Your admin panel login |
 | `SEED_DEMO` | `true` to load demo shops/products on the first deploy (optional) |
 

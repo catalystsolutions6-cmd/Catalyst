@@ -21,10 +21,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [ready, setReady] = useState(false);
 
+  // Load the saved cart after hydration (localStorage is not available during server render).
   useEffect(() => {
+    let saved: CartItem[] = [];
     try {
-      setItems(JSON.parse(localStorage.getItem(KEY) || "[]"));
+      saved = JSON.parse(localStorage.getItem(KEY) || "[]");
     } catch {}
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time sync from browser storage
+    setItems(saved);
     setReady(true);
   }, []);
   useEffect(() => {

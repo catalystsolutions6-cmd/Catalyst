@@ -9,7 +9,7 @@ const CORS = {
   "Access-Control-Max-Age": "86400",
 };
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   if (req.method === "OPTIONS") return new NextResponse(null, { status: 204, headers: CORS });
   const res = NextResponse.next();
   for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);

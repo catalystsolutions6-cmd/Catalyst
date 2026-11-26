@@ -14,7 +14,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, type ProductStatus } from "../api";
 import { EMPTY_FORM, ListingForm, parsePrice, specsFromObject, specsToObject, validate, type FormErrors, type FormValues } from "../ListingForm";
-import { PermissionDeniedError, pickPhotos, type PhotoSource } from "../photos";
+import { analysisCopy, PermissionDeniedError, pickPhotos, type PhotoSource } from "../photos";
 import { Button, C, Card } from "../ui";
 
 type Phase = "pick" | "analyzing" | "review";
@@ -71,7 +71,7 @@ export default function NewListing() {
     setPhase("analyzing");
     setAiError(null);
     try {
-      const d = await api.analyze(uri);
+      const d = await api.analyze(await analysisCopy(uri));
       setForm((f) => ({
         ...f,
         title: d.title,

@@ -35,3 +35,14 @@ async function compress(uri: string, width: number, height: number): Promise<str
   const out = await ref.saveAsync({ compress: 0.75, format: SaveFormat.JPEG });
   return out.uri;
 }
+
+/** A smaller copy for the AI: about 3x fewer bytes than the upload copy, so it reaches the server and the model faster on mobile data. */
+export async function analysisCopy(uri: string): Promise<string> {
+  try {
+    const ref = await ImageManipulator.manipulate(uri).resize({ width: 1024, height: null }).renderAsync();
+    const out = await ref.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
+    return out.uri;
+  } catch {
+    return uri;
+  }
+}

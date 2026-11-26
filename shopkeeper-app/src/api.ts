@@ -99,6 +99,9 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 3000
       signal: controller.signal,
     });
   } catch {
+    if (controller.signal.aborted) {
+      throw new ApiError("The server took too long to answer. Please try again.", 408);
+    }
     throw new ApiError("No internet connection, or the server is not reachable.", 0);
   } finally {
     clearTimeout(timer);
@@ -112,7 +115,11 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 3000
   }
   if (!res.ok) {
     if (res.status === 401 && path !== "/api/shop/auth/login") onUnauthorized?.();
-    const msg = (data as { error?: string } | null)?.error ?? `Something went wrong (${res.status})`;
+    const fallback =
+      res.status === 504 || res.status === 502 || res.status === 503
+        ? "The server is busy or took too long. Please try again in a moment."
+        : `Something went wrong (${res.status})`;
+    const msg = (data as { error?: string } | null)?.error ?? fallback;
     throw new ApiError(msg, res.status);
   }
   return data as T;

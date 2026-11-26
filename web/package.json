@@ -9,8 +9,10 @@
     "lint": "eslint",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "setup": "prisma db push && tsx prisma/seed.ts",
-    "postinstall": "prisma generate"
+    "setup": "prisma db push && tsx prisma/setup.ts",
+    "postinstall": "prisma generate",
+    "db:setup": "tsx prisma/setup.ts",
+    "vercel-build": "prisma db push --skip-generate && tsx prisma/setup.ts && next build"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",

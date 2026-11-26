@@ -2,9 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "installCommand": "npm install",
-  "buildCommand": "npm run build",
-  "regions": ["bom1"],
+  "buildCommand": "npm run vercel-build",
+  "regions": [
+    "bom1"
+  ],
   "functions": {
-    "src/app/api/shop/listings/analyze/route.ts": { "maxDuration": 60 }
+    "src/app/api/shop/listings/analyze/route.ts": {
+      "maxDuration": 60
+    }
   }
 }

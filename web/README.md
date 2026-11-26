@@ -6,14 +6,16 @@ get a virtual shop; their products appear on one storefront. Customers never see
 Stack: Next.js 15 (App Router) · Prisma · SQLite in dev (Postgres in prod) · Tailwind CSS 4.
 
 ## Run locally
+You need Node 20+ and a Postgres database (a free Neon database works, or local Postgres).
 ```bash
-cp .env.example .env      # set ADMIN_PASSWORD and GEMINI_API_KEY (free)
+cp .env.example .env      # set DATABASE_URL, ADMIN_PASSWORD, GEMINI_API_KEY (free), SEED_DEMO=true for demo data
 npm install
-npm run setup             # creates the database and loads demo shops/products
+npm run setup             # creates the tables, categories and (with SEED_DEMO=true) demo shops/products
 npm run dev               # http://localhost:3000
 ```
 - Storefront: `/`  ·  Admin: `/admin` (ADMIN_EMAIL / ADMIN_PASSWORD from .env)
-- Demo shopkeeper app login: `03001234567` / `shop1234`
+- Demo shopkeeper app login (with demo data): `03001234567` / `shop1234`
+- `npm run db:seed` wipes the database and reloads demo data (never run it against real data).
 
 ## Rename the brand
 Edit `src/lib/brand.ts` (name, tagline, support phone, delivery fee). Logo mark is in `src/components/Logo.tsx`.
@@ -51,13 +53,17 @@ Photos uploaded from the shopkeeper app are stored by `src/lib/uploads.ts`, whic
 Set `STORAGE_DRIVER` to force one, and `UPLOAD_FOLDER` (default `products`) to choose the folder.
 Cloud backends return absolute `https://` image URLs; local disk returns `/uploads/...`. Uploads are limited to 4 MB (Vercel's request limit is 4.5 MB).
 
-## Deploy to Vercel
-This repository is a monorepo, so in Vercel set **Root Directory = `web`** when importing the project
-(Project → Settings → Build and Deployment → Root Directory). `web/vercel.json` sets the framework,
-build command and the Mumbai region (closest to Pakistan).
+## Deploy to Vercel (free tiers)
+Root Directory must be **`web`** (this repo is a monorepo). `web/vercel.json` runs `npm run vercel-build`, which
+creates/updates the database tables, makes sure categories exist, loads demo data once if `SEED_DEMO=true`, then builds.
 
-1. Database: in `prisma/schema.prisma` set `provider = "postgresql"` and set `DATABASE_URL` to a Postgres database
-   (Vercel → Storage → Neon is easiest). Run `npx prisma db push` once, and `npm run db:seed` if you want demo data.
-2. Photos: connect a Vercel Blob store (or set `CLOUDINARY_URL`).
-3. Environment variables: `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `GEMINI_API_KEY`, plus the storage variable.
-4. To keep the site private before launch, turn on Vercel Authentication (Settings → Deployment Protection).
+Environment variables:
+| Name | Where it comes from |
+|---|---|
+| `DATABASE_URL` | Added automatically when you connect a Neon database (Vercel → Storage → Neon, free plan) |
+| `BLOB_READ_WRITE_TOKEN` | Added automatically when you connect a Blob store (Vercel → Storage → Blob) |
+| `GEMINI_API_KEY` | Free key from https://aistudio.google.com/apikey |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Your admin panel login |
+| `SEED_DEMO` | `true` to load demo shops/products on the first deploy (optional) |
+
+To keep the site private before launch: Settings → Deployment Protection → Vercel Authentication.

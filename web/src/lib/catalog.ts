@@ -8,7 +8,7 @@ export async function findProducts(base: Prisma.ProductWhereInput, p: CatalogPar
   const and: Prisma.ProductWhereInput[] = [];
   if (p.q) {
     for (const word of p.q.trim().split(/\s+/).slice(0, 6)) {
-      and.push({ OR: [{ title: { contains: word } }, { brand: { contains: word } }, { model: { contains: word } }, { description: { contains: word } }] });
+      and.push({ OR: [{ title: { contains: word, mode: "insensitive" } }, { brand: { contains: word, mode: "insensitive" } }, { model: { contains: word, mode: "insensitive" } }, { description: { contains: word, mode: "insensitive" } }] });
     }
   }
   if (p.condition) and.push({ condition: p.condition });

@@ -1,11 +1,11 @@
-// Database schema. Dev uses SQLite; for production switch provider to "postgresql"
-// and set DATABASE_URL to your Postgres connection string.
+// Database schema (PostgreSQL). DATABASE_URL is your Postgres connection string,
+// e.g. from Neon (free) via Vercel -> Storage -> Neon.
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

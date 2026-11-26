@@ -9,7 +9,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const [products, shops] = await Promise.all([
     db.product.findMany({
-      where: { ...(sp.shop ? { shopId: sp.shop } : {}), ...(sp.q ? { title: { contains: sp.q } } : {}) },
+      where: { ...(sp.shop ? { shopId: sp.shop } : {}), ...(sp.q ? { title: { contains: sp.q, mode: "insensitive" } } : {}) },
       orderBy: { createdAt: "desc" },
       take: 300,
       include: { shop: { select: { name: true, market: true } } },

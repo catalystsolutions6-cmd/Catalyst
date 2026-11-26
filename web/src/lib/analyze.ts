@@ -49,7 +49,6 @@ export class AnalyzeError extends Error {
 const SUPPORTED_MEDIA = ["image/jpeg", "image/png", "image/webp"] as const;
 type SupportedMedia = (typeof SUPPORTED_MEDIA)[number];
 const MAX_BYTES = 5 * 1024 * 1024;
-const TIMEOUT_MS = 45_000;
 
 const DraftSchema = z.object({
   is_product: z.boolean(),
@@ -128,24 +127,39 @@ async function findFlashModels(key: string): Promise<string[]> {
   }
 }
 
-async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [
-        {
-          role: "user",
-          parts: [{ inlineData: { mimeType: mediaType, data: base64 } }, { text: "Draft the listing for this product photo." }],
-        },
-      ],
-      generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0.2 },
-    }),
-  });
-  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-  return { status: res.status, data };
+type CallResult = { status: number; data: GeminiResponse };
+// Models that rejected the low-thinking setting (older models); we stop sending it to them.
+const noThinkingConfig = new Set<string>();
+
+async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string, timeoutMs: number): Promise<CallResult> {
+  const send = async (withThinking: boolean): Promise<CallResult> => {
+    const generationConfig: Record<string, unknown> = { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0.2 };
+    // Newer Flash models "think" before answering, which can take most of a minute. A listing doesn't need it.
+    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: [{ role: "user", parts: [{ inlineData: { mimeType: mediaType, data: base64 } }, { text: "Draft the listing for this product photo." }] }],
+          generationConfig,
+        }),
+      });
+      return { status: res.status, data: (await res.json().catch(() => ({}))) as GeminiResponse };
+    } catch (err) {
+      if ((err as Error).name === "TimeoutError") return { status: 504, data: { error: { message: `${model} timed out` } } };
+      throw err;
+    }
+  };
+  const useThinking = !noThinkingConfig.has(model);
+  let r = await send(useThinking);
+  if (useThinking && r.status === 400 && /thinking/i.test(r.data.error?.message || "")) {
+    noThinkingConfig.add(model);
+    r = await send(false);
+  }
+  return r;
 }
 
 export async function analyzeProductImage(input: { bytes: Buffer; mediaType: string }): Promise<ListingDraft> {
@@ -161,27 +175,31 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
 
   const base64 = input.bytes.toString("base64");
   const media = mediaType as SupportedMedia;
-  let r;
+  // Vercel stops the function at 60 s, so keep every attempt inside one 55 s budget.
+  const deadline = Date.now() + 55_000;
+  const left = () => deadline - Date.now();
+  const retryable = (st: number) => st === 404 || st === 500 || st === 503 || st === 504;
+  let r: CallResult;
   try {
     let model = process.env.GEMINI_MODEL || resolvedModel || "gemini-flash-latest";
-    r = await callGemini(model, key, media, base64);
-    if (r.status === 503 || r.status === 500) r = await callGemini(model, key, media, base64); // overloaded: retry once
-    if (r.status === 404 || r.status === 503 || r.status === 500) {
-      // Model unavailable for this key, or overloaded: try other Flash models this key can use.
+    r = await callGemini(model, key, media, base64, Math.min(25_000, left()));
+    if (retryable(r.status) && left() > 8_000) {
+      // Model unavailable, overloaded or slow: try other Flash models this key can use (Flash-Lite last).
       const tried = new Set([model]);
-      for (const candidate of (await findFlashModels(key)).filter((m) => !tried.has(m)).slice(0, 3)) {
+      for (const candidate of (await findFlashModels(key)).filter((m) => !tried.has(m))) {
+        if (left() < 8_000) break;
         model = candidate;
-        r = await callGemini(model, key, media, base64);
-        if (r.status !== 404 && r.status !== 503 && r.status !== 500) break;
+        r = await callGemini(model, key, media, base64, Math.min(20_000, left()));
+        if (!retryable(r.status)) break;
       }
     }
     if (r.status === 200) resolvedModel = model;
-  } catch (err) {
-    if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
+  } catch {
     throw new AnalyzeError("Could not reach the AI service, please try again", 502);
   }
 
   const { status, data } = r;
+  if (status === 504) throw new AnalyzeError("AI took too long, please try again", 504);
   if (status === 503 || status === 500) throw new AnalyzeError("The free AI is busy right now, please try again in a minute", 503);
   if (status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
   if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);

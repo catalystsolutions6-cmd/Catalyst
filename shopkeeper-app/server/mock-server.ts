@@ -5,7 +5,7 @@
  *   npx tsx mock-server.ts            # http://localhost:4000
  *   login: phone 03001234567 / password demo1234
  *
- * /api/shop/listings/analyze calls Claude if ANTHROPIC_API_KEY is set, else returns a sample draft.
+ * /api/shop/listings/analyze calls Gemini if GEMINI_API_KEY is set, else returns a sample draft.
  */
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -117,7 +117,7 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && path === "/api/shop/listings/analyze") {
       const img = await readImage(req);
       if (!img) return send(res, 400, { error: "No image" });
-      if (!process.env.ANTHROPIC_API_KEY) {
+      if (!process.env.GEMINI_API_KEY) {
         await new Promise((r) => setTimeout(r, 1200));
         return send(res, 200, SAMPLE);
       }

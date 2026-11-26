@@ -13,7 +13,7 @@ Android app (Expo / React Native, TypeScript) for marketplace shopkeepers: snap 
 ## Run locally
 ```bash
 npm install
-# terminal 1: mock API (sample AI result unless ANTHROPIC_API_KEY is set)
+# terminal 1: mock API (sample AI result unless GEMINI_API_KEY is set)
 cd server && npm install && npx tsx mock-server.ts      # login 03001234567 / demo1234
 # terminal 2
 EXPO_PUBLIC_API_URL=http://<your-LAN-IP>:4000 npx expo start   # scan with Expo Go on Android

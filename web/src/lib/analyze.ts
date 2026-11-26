@@ -107,23 +107,24 @@ type GeminiResponse = {
 let resolvedModel: string | null = null;
 
 /** Lists the models this key can use and picks the newest general-purpose Flash model. */
-async function findFlashModel(key: string): Promise<string | null> {
+async function findFlashModels(key: string): Promise<string[]> {
   try {
     const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
       headers: { "x-goog-api-key": key },
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const { models = [] } = (await res.json()) as { models?: { name: string; supportedGenerationMethods?: string[] }[] };
     const names = models
       .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
       .map((m) => m.name.replace(/^models\//, ""))
-      .filter((n) => /flash/.test(n) && !/lite|image|tts|audio|live|thinking|exp|preview/.test(n));
+      .filter((n) => /flash/.test(n) && !/image|tts|audio|live|thinking|exp|preview/.test(n));
     const version = (n: string) => parseFloat(n.match(/(\d+(\.\d+)?)/)?.[1] || "0");
-    names.sort((a, b) => version(b) - version(a) || a.length - b.length);
-    return names[0] ?? null;
+    // Newest full Flash models first, Flash-Lite models after them as a fallback.
+    names.sort((a, b) => Number(/lite/.test(a)) - Number(/lite/.test(b)) || version(b) - version(a) || a.length - b.length);
+    return names;
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -164,15 +165,16 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   try {
     let model = process.env.GEMINI_MODEL || resolvedModel || "gemini-flash-latest";
     r = await callGemini(model, key, media, base64);
-    if (r.status === 404) {
-      // Model name not available for this key: ask Google which Flash models it can use.
-      const found = await findFlashModel(key);
-      if (found && found !== model) {
-        model = found;
+    if (r.status === 503 || r.status === 500) r = await callGemini(model, key, media, base64); // overloaded: retry once
+    if (r.status === 404 || r.status === 503 || r.status === 500) {
+      // Model unavailable for this key, or overloaded: try other Flash models this key can use.
+      const tried = new Set([model]);
+      for (const candidate of (await findFlashModels(key)).filter((m) => !tried.has(m)).slice(0, 3)) {
+        model = candidate;
         r = await callGemini(model, key, media, base64);
+        if (r.status !== 404 && r.status !== 503 && r.status !== 500) break;
       }
     }
-    if (r.status === 503 || r.status === 500) r = await callGemini(model, key, media, base64); // overloaded: retry once
     if (r.status === 200) resolvedModel = model;
   } catch (err) {
     if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
@@ -180,6 +182,7 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   }
 
   const { status, data } = r;
+  if (status === 503 || status === 500) throw new AnalyzeError("The free AI is busy right now, please try again in a minute", 503);
   if (status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
   if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);
   if (status === 401 || status === 403) throw new AnalyzeError("AI key is invalid or not allowed (check GEMINI_API_KEY)", 503);

@@ -4,7 +4,7 @@
  * Get a free key at https://aistudio.google.com/apikey and set GEMINI_API_KEY.
  * Optional env:
  *   GEMINI_MODEL  (default "gemini-flash-latest", Google's alias for the newest Flash model;
- *                  falls back to "gemini-2.5-flash" if the alias is unavailable)
+ *                  if that name is unavailable, picks the newest Flash model the key can use)
  * Uses the Gemini REST API directly (no SDK). Depends only on zod.
  */
 import { z } from "zod";
@@ -50,7 +50,6 @@ const SUPPORTED_MEDIA = ["image/jpeg", "image/png", "image/webp"] as const;
 type SupportedMedia = (typeof SUPPORTED_MEDIA)[number];
 const MAX_BYTES = 5 * 1024 * 1024;
 const TIMEOUT_MS = 45_000;
-const FALLBACK_MODEL = "gemini-2.5-flash";
 
 const DraftSchema = z.object({
   is_product: z.boolean(),
@@ -105,6 +104,29 @@ type GeminiResponse = {
   error?: { code?: number; message?: string; status?: string };
 };
 
+let resolvedModel: string | null = null;
+
+/** Lists the models this key can use and picks the newest general-purpose Flash model. */
+async function findFlashModel(key: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+      headers: { "x-goog-api-key": key },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const { models = [] } = (await res.json()) as { models?: { name: string; supportedGenerationMethods?: string[] }[] };
+    const names = models
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => m.name.replace(/^models\//, ""))
+      .filter((n) => /flash/.test(n) && !/lite|image|tts|audio|live|thinking|exp|preview/.test(n));
+    const version = (n: string) => parseFloat(n.match(/(\d+(\.\d+)?)/)?.[1] || "0");
+    names.sort((a, b) => version(b) - version(a) || a.length - b.length);
+    return names[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string) {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
@@ -137,11 +159,21 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   if (input.bytes.length > MAX_BYTES) throw new AnalyzeError("Image is larger than 5 MB, please resize before upload", 413);
 
   const base64 = input.bytes.toString("base64");
-  const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+  const media = mediaType as SupportedMedia;
   let r;
   try {
-    r = await callGemini(model, key, mediaType as SupportedMedia, base64);
-    if (r.status === 404 && model !== FALLBACK_MODEL) r = await callGemini(FALLBACK_MODEL, key, mediaType as SupportedMedia, base64);
+    let model = process.env.GEMINI_MODEL || resolvedModel || "gemini-flash-latest";
+    r = await callGemini(model, key, media, base64);
+    if (r.status === 404) {
+      // Model name not available for this key: ask Google which Flash models it can use.
+      const found = await findFlashModel(key);
+      if (found && found !== model) {
+        model = found;
+        r = await callGemini(model, key, media, base64);
+      }
+    }
+    if (r.status === 503 || r.status === 500) r = await callGemini(model, key, media, base64); // overloaded: retry once
+    if (r.status === 200) resolvedModel = model;
   } catch (err) {
     if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
     throw new AnalyzeError("Could not reach the AI service, please try again", 502);
@@ -152,7 +184,11 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);
   if (status === 401 || status === 403) throw new AnalyzeError("AI key is invalid or not allowed (check GEMINI_API_KEY)", 503);
   if (status === 400) throw new AnalyzeError("The photo could not be read, please retake it", 400);
-  if (status !== 200) throw new AnalyzeError("AI service error, please try again", 502);
+  if (status !== 200) {
+    console.error("Gemini error", status, data.error);
+    const why = (data.error?.message || data.error?.status || "").replace(/\s+/g, " ").slice(0, 160);
+    throw new AnalyzeError(`AI service error, please try again (Gemini ${status}${why ? ": " + why : ""})`, 502);
+  }
   if (data.promptFeedback?.blockReason) throw new AnalyzeError("This photo could not be processed, please fill the listing manually", 422);
 
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";

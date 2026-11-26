@@ -1,16 +1,33 @@
 {
-  "cli": { "version": ">= 16.0.0", "appVersionSource": "remote" },
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
   "build": {
     "preview": {
       "distribution": "internal",
-      "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://staging.example.com" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://catalyst-37cd.vercel.app"
+      }
     },
     "production": {
       "autoIncrement": true,
-      "android": { "buildType": "app-bundle" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://api.example.com" }
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://catalyst-37cd.vercel.app"
+      }
     }
   },
-  "submit": { "production": { "android": { "track": "internal" } } }
+  "submit": {
+    "production": {
+      "android": {
+        "track": "internal"
+      }
+    }
+  }
 }

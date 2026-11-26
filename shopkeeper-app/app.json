@@ -45,7 +45,8 @@
     ],
     "scheme": "catalystseller",
     "extra": {
-      "apiUrl": "http://10.0.2.2:4000"
-    }
+      "apiUrl": "https://catalyst-37cd.vercel.app"
+    },
+    "owner": "catalystsolutions"
   }
 }

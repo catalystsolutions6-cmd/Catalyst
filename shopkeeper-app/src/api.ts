@@ -1,11 +1,11 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 
-/** API base URL: EXPO_PUBLIC_API_URL wins, then app.json "extra.apiUrl". 10.0.2.2 = host machine from the Android emulator. */
+/** API base URL: EXPO_PUBLIC_API_URL wins (e.g. a local backend), then app.json "extra.apiUrl" (the live site). */
 export const API_URL: string = (
   process.env.EXPO_PUBLIC_API_URL ??
   (Constants.expoConfig?.extra?.apiUrl as string | undefined) ??
-  "http://10.0.2.2:4000"
+  "https://catalyst-37cd.vercel.app"
 ).replace(/\/$/, "");
 
 export type Condition = "new" | "used" | "refurbished";

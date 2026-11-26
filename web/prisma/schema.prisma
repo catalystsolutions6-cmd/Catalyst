@@ -1,0 +1,102 @@
+// Database schema. Dev uses SQLite; for production switch provider to "postgresql"
+// and set DATABASE_URL to your Postgres connection string.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id           String    @id @default(cuid())
+  name         String
+  slug         String    @unique
+  market       String // e.g. "Hafeez Center", "Hall Road"
+  shopNumber   String? // e.g. "Shop 12, 2nd floor"
+  ownerName    String?
+  phone        String    @unique // shopkeeper app login
+  passwordHash String
+  commission   Int       @default(5) // platform commission %
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  products     Product[]
+  orderItems   OrderItem[]
+  sessions     Session[]
+}
+
+model Category {
+  slug      String    @id
+  name      String
+  sortOrder Int       @default(0)
+  products  Product[]
+}
+
+model Product {
+  id           String      @id @default(cuid())
+  slug         String      @unique
+  title        String
+  description  String
+  brand        String?
+  model        String?
+  condition    String      @default("new") // new | used | refurbished
+  specs        String      @default("{}") // JSON object
+  images       String      @default("[]") // JSON array of urls
+  price        Int // PKR
+  comparePrice Int? // original price for showing a discount
+  stock        Int         @default(1)
+  status       String      @default("active") // active | draft | archived
+  categorySlug String
+  category     Category    @relation(fields: [categorySlug], references: [slug])
+  shopId       String
+  shop         Shop        @relation(fields: [shopId], references: [id])
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  orderItems   OrderItem[]
+
+  @@index([categorySlug, status])
+  @@index([shopId])
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  orderNumber   String      @unique
+  customerName  String
+  phone         String
+  email         String?
+  address       String
+  city          String
+  notes         String?
+  paymentMethod String      @default("COD")
+  status        String      @default("pending") // pending | confirmed | shipped | delivered | cancelled
+  subtotal      Int
+  shippingFee   Int
+  total         Int
+  createdAt     DateTime    @default(now())
+  items         OrderItem[]
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  shopId    String // snapshot of the selling shop (admin only)
+  shop      Shop    @relation(fields: [shopId], references: [id])
+  title     String
+  image     String?
+  price     Int
+  quantity  Int
+  status    String  @default("pending") // per-shop fulfilment: pending | collected | cancelled
+}
+
+model Session {
+  token     String   @id
+  role      String // "admin" | "shop"
+  shopId    String?
+  shop      Shop?    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}

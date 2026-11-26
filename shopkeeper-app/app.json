@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Catalyst Seller",
+    "slug": "catalyst-seller",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.catalystsolutions.seller"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.catalystsolutions.seller",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "output": "single"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "asyncRoutes": false
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow the app to use your camera to photograph products for listings.",
+          "photosPermission": "Allow the app to pick product photos from your gallery."
+        }
+      ]
+    ],
+    "scheme": "catalystseller",
+    "extra": {
+      "apiUrl": "http://10.0.2.2:4000"
+    }
+  }
+}

@@ -3,8 +3,10 @@
  *
  * Get a free key at https://aistudio.google.com/apikey and set GEMINI_API_KEY.
  * Optional env:
+ *   GROQ_API_KEY  optional free backup AI (https://console.groq.com/keys) used when Gemini is busy or out of quota
+ *   GROQ_MODEL    (default "qwen/qwen3.8-27b")
  *   GEMINI_MODEL  (default "gemini-flash-latest", Google's alias for the newest Flash model;
- *                  falls back to "gemini-2.5-flash" if the alias is unavailable)
+ *                  if that name is unavailable, picks the newest Flash model the key can use)
  * Uses the Gemini REST API directly (no SDK). Depends only on zod.
  */
 import { z } from "zod";
@@ -49,8 +51,6 @@ export class AnalyzeError extends Error {
 const SUPPORTED_MEDIA = ["image/jpeg", "image/png", "image/webp"] as const;
 type SupportedMedia = (typeof SUPPORTED_MEDIA)[number];
 const MAX_BYTES = 5 * 1024 * 1024;
-const TIMEOUT_MS = 45_000;
-const FALLBACK_MODEL = "gemini-2.5-flash";
 
 const DraftSchema = z.object({
   is_product: z.boolean(),
@@ -105,60 +105,142 @@ type GeminiResponse = {
   error?: { code?: number; message?: string; status?: string };
 };
 
-async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [
-        {
-          role: "user",
-          parts: [{ inlineData: { mimeType: mediaType, data: base64 } }, { text: "Draft the listing for this product photo." }],
-        },
-      ],
-      generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0.2 },
-    }),
-  });
-  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-  return { status: res.status, data };
+let resolvedModel: string | null = null;
+
+/** Lists the models this key can use and picks the newest general-purpose Flash model. */
+async function findFlashModels(key: string): Promise<string[]> {
+  try {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+      headers: { "x-goog-api-key": key },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return [];
+    const { models = [] } = (await res.json()) as { models?: { name: string; supportedGenerationMethods?: string[] }[] };
+    const names = models
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => m.name.replace(/^models\//, ""))
+      .filter((n) => /flash/.test(n) && !/image|tts|audio|live|thinking|exp|preview/.test(n));
+    const version = (n: string) => parseFloat(n.match(/(\d+(\.\d+)?)/)?.[1] || "0");
+    // Newest full Flash models first, Flash-Lite models after them as a fallback.
+    names.sort((a, b) => Number(/lite/.test(a)) - Number(/lite/.test(b)) || version(b) - version(a) || a.length - b.length);
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+type CallResult = { status: number; data: GeminiResponse };
+// Models that rejected the low-thinking setting (older models); we stop sending it to them.
+const noThinkingConfig = new Set<string>();
+
+async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string, timeoutMs: number): Promise<CallResult> {
+  const send = async (withThinking: boolean): Promise<CallResult> => {
+    const generationConfig: Record<string, unknown> = { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0.2 };
+    // Newer Flash models "think" before answering, which can take most of a minute. A listing doesn't need it.
+    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: [{ role: "user", parts: [{ inlineData: { mimeType: mediaType, data: base64 } }, { text: "Draft the listing for this product photo." }] }],
+          generationConfig,
+        }),
+      });
+      return { status: res.status, data: (await res.json().catch(() => ({}))) as GeminiResponse };
+    } catch (err) {
+      if ((err as Error).name === "TimeoutError") return { status: 504, data: { error: { message: `${model} timed out` } } };
+      throw err;
+    }
+  };
+  const useThinking = !noThinkingConfig.has(model);
+  let r = await send(useThinking);
+  if (useThinking && r.status === 400 && /thinking/i.test(r.data.error?.message || "")) {
+    noThinkingConfig.add(model);
+    r = await send(false);
+  }
+  return r;
 }
 
 export async function analyzeProductImage(input: { bytes: Buffer; mediaType: string }): Promise<ListingDraft> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new AnalyzeError("AI is not configured (GEMINI_API_KEY missing)", 503);
-
   const mediaType = input.mediaType.toLowerCase().replace("image/jpg", "image/jpeg");
   if (!SUPPORTED_MEDIA.includes(mediaType as SupportedMedia)) {
     throw new AnalyzeError(`Unsupported image type: ${input.mediaType}`, 415);
   }
   if (input.bytes.length === 0) throw new AnalyzeError("Empty image", 400);
   if (input.bytes.length > MAX_BYTES) throw new AnalyzeError("Image is larger than 5 MB, please resize before upload", 413);
-
   const base64 = input.bytes.toString("base64");
-  const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
-  let r;
+  const media = mediaType as SupportedMedia;
+
+  const gemini = process.env.GEMINI_API_KEY;
+  const groq = process.env.GROQ_API_KEY;
+  if (!gemini && !groq) throw new AnalyzeError("AI is not configured (set GEMINI_API_KEY)", 503);
+  // Vercel stops the function at 60 s. With a backup AI configured, leave it ~17 s.
+  const start = Date.now();
+  if (gemini) {
+    try {
+      return await analyzeWithGemini(gemini, media, base64, start + (groq ? 38_000 : 55_000));
+    } catch (e) {
+      const fallbackWorthy = e instanceof AnalyzeError && [429, 502, 503, 504].includes(e.status);
+      if (!groq || !fallbackWorthy) throw e;
+      console.warn("Gemini failed, trying Groq:", (e as Error).message);
+    }
+  }
+  return analyzeWithGroq(groq!, media, base64, start + 56_000);
+}
+
+async function analyzeWithGemini(key: string, media: SupportedMedia, base64: string, deadline: number): Promise<ListingDraft> {
+  const left = () => deadline - Date.now();
+  // 429 is per model on the free tier, so another model may still have quota left.
+  const retryable = (st: number) => st === 404 || st === 429 || st === 500 || st === 503 || st === 504;
+  let r: CallResult;
   try {
-    r = await callGemini(model, key, mediaType as SupportedMedia, base64);
-    if (r.status === 404 && model !== FALLBACK_MODEL) r = await callGemini(FALLBACK_MODEL, key, mediaType as SupportedMedia, base64);
-  } catch (err) {
-    if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
+    let model = process.env.GEMINI_MODEL || resolvedModel || "gemini-flash-latest";
+    r = await callGemini(model, key, media, base64, Math.min(25_000, left()));
+    if (retryable(r.status) && left() > 8_000) {
+      // Model unavailable, overloaded or slow: try other Flash models this key can use (Flash-Lite last).
+      const tried = new Set([model]);
+      for (const candidate of (await findFlashModels(key)).filter((m) => !tried.has(m))) {
+        if (left() < 8_000) break;
+        model = candidate;
+        r = await callGemini(model, key, media, base64, Math.min(20_000, left()));
+        if (!retryable(r.status)) break;
+      }
+    }
+    if (r.status === 200) resolvedModel = model;
+  } catch {
     throw new AnalyzeError("Could not reach the AI service, please try again", 502);
   }
 
   const { status, data } = r;
-  if (status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
+  if (status === 504) throw new AnalyzeError("AI took too long, please try again", 504);
+  if (status === 503 || status === 500) throw new AnalyzeError("The free AI is busy right now, please try again in a minute", 503);
+  if (status === 429) {
+    console.error("Gemini quota", data.error?.message);
+    const daily = /per ?day|daily|PerDay/i.test(data.error?.message || "");
+    throw new AnalyzeError(daily ? "Today's free AI limit is used up. It resets at 1 PM Pakistan time; until then please type the details." : "Free AI limit reached for now, please try again in a minute", 429);
+  }
   if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);
   if (status === 401 || status === 403) throw new AnalyzeError("AI key is invalid or not allowed (check GEMINI_API_KEY)", 503);
   if (status === 400) throw new AnalyzeError("The photo could not be read, please retake it", 400);
-  if (status !== 200) throw new AnalyzeError("AI service error, please try again", 502);
+  if (status !== 200) {
+    console.error("Gemini error", status, data.error);
+    const why = (data.error?.message || data.error?.status || "").replace(/\s+/g, " ").slice(0, 160);
+    throw new AnalyzeError(`AI service error, please try again (Gemini ${status}${why ? ": " + why : ""})`, 502);
+  }
   if (data.promptFeedback?.blockReason) throw new AnalyzeError("This photo could not be processed, please fill the listing manually", 422);
 
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return toDraft(text);
+}
+
+/** Validates the model's JSON and turns it into a ListingDraft. */
+function toDraft(text: string): ListingDraft {
   let parsed;
   try {
-    parsed = DraftSchema.safeParse(JSON.parse(text));
+    parsed = DraftSchema.safeParse(JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")));
   } catch {
     parsed = null;
   }
@@ -181,4 +263,45 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
     specs,
     confidence: Math.max(0, Math.min(1, out.confidence)),
   };
+}
+
+// ---- Optional backup: Groq (free tier, OpenAI-compatible API). Used only if GROQ_API_KEY is set
+// and Gemini is busy, out of free quota, or slow. Free key: https://console.groq.com/keys
+async function analyzeWithGroq(key: string, media: SupportedMedia, base64: string, deadline: number): Promise<ListingDraft> {
+  const model = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
+  const shape = `Reply with only a JSON object with exactly these keys: is_product (boolean), title (string), description (string), category_slug (one of: ${CATEGORY_SLUGS.join(", ")}), brand (string), model (string), condition ("new" | "used" | "refurbished"), specs (array of {"name": string, "value": string}), confidence (number 0-1).`;
+  let res: Response;
+  try {
+    res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(Math.max(5_000, deadline - Date.now())),
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: `${SYSTEM_PROMPT}\n\n${shape}` },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Draft the listing for this product photo." },
+              { type: "image_url", image_url: { url: `data:${media};base64,${base64}` } },
+            ],
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
+    throw new AnalyzeError("Could not reach the AI service, please try again", 502);
+  }
+  const data = (await res.json().catch(() => ({}))) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
+  if (res.status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
+  if (res.status === 401 || res.status === 403) throw new AnalyzeError("Backup AI key is invalid (check GROQ_API_KEY)", 503);
+  if (!res.ok) {
+    console.error("Groq error", res.status, data.error);
+    throw new AnalyzeError(`AI service error, please try again (Groq ${res.status}: ${(data.error?.message || "").slice(0, 160)})`, 502);
+  }
+  return toDraft(data.choices?.[0]?.message?.content ?? "");
 }

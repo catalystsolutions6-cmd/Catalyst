@@ -1,5 +1,5 @@
 import { getShopFromRequest, jsonError } from "@/lib/auth";
-import { UploadError, saveImage } from "@/lib/uploads";
+import { StorageConfigError, UploadError, storageErrorHint, saveImage } from "@/lib/uploads";
 
 export async function POST(req: Request) {
   const shop = await getShopFromRequest(req);
@@ -12,7 +12,8 @@ export async function POST(req: Request) {
     return Response.json({ url }, { status: 201 });
   } catch (e) {
     if (e instanceof UploadError) return jsonError(e.message, 400);
+    if (e instanceof StorageConfigError) return jsonError(e.message, 503);
     console.error("upload failed", e);
-    return jsonError("Could not save the photo, please try again", 502);
+    return jsonError(`Could not save the photo, please try again (${storageErrorHint(e)})`, 502);
   }
 }

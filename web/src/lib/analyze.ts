@@ -178,7 +178,8 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   // Vercel stops the function at 60 s, so keep every attempt inside one 55 s budget.
   const deadline = Date.now() + 55_000;
   const left = () => deadline - Date.now();
-  const retryable = (st: number) => st === 404 || st === 500 || st === 503 || st === 504;
+  // 429 is per model on the free tier, so another model may still have quota left.
+  const retryable = (st: number) => st === 404 || st === 429 || st === 500 || st === 503 || st === 504;
   let r: CallResult;
   try {
     let model = process.env.GEMINI_MODEL || resolvedModel || "gemini-flash-latest";
@@ -201,7 +202,11 @@ export async function analyzeProductImage(input: { bytes: Buffer; mediaType: str
   const { status, data } = r;
   if (status === 504) throw new AnalyzeError("AI took too long, please try again", 504);
   if (status === 503 || status === 500) throw new AnalyzeError("The free AI is busy right now, please try again in a minute", 503);
-  if (status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
+  if (status === 429) {
+    console.error("Gemini quota", data.error?.message);
+    const daily = /per ?day|daily|PerDay/i.test(data.error?.message || "");
+    throw new AnalyzeError(daily ? "Today's free AI limit is used up. It resets at 1 PM Pakistan time; until then please type the details." : "Free AI limit reached for now, please try again in a minute", 429);
+  }
   if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);
   if (status === 401 || status === 403) throw new AnalyzeError("AI key is invalid or not allowed (check GEMINI_API_KEY)", 503);
   if (status === 400) throw new AnalyzeError("The photo could not be read, please retake it", 400);

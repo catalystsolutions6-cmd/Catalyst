@@ -20,7 +20,9 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.catalystsolutions.seller",
       "permissions": [
-        "android.permission.CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -40,7 +42,8 @@
         "expo-image-picker",
         {
           "cameraPermission": "Allow the app to use your camera to photograph products for listings.",
-          "photosPermission": "Allow the app to pick product photos from your gallery."
+          "photosPermission": "Allow the app to pick product photos from your gallery.",
+          "microphonePermission": false
         }
       ]
     ],

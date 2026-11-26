@@ -1,12 +1,8 @@
-import { readFile } from "fs/promises";
-import path from "path";
 import { getShopFromRequest, jsonError } from "@/lib/auth";
-import { ALLOWED, UPLOAD_DIR, saveImage } from "@/lib/uploads";
+import { UploadError, loadImage, saveImage } from "@/lib/uploads";
 import { AnalyzeError, analyzeProductImage } from "@/lib/analyze";
 
 export const maxDuration = 60;
-
-const EXT_TYPES: Record<string, string> = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" };
 
 export async function POST(req: Request) {
   const shop = await getShopFromRequest(req);
@@ -14,29 +10,22 @@ export async function POST(req: Request) {
 
   let bytes: Buffer;
   let mediaType: string;
-  let imageUrl: string | undefined;
+  let imageUrl: string;
   const ct = req.headers.get("content-type") || "";
   try {
     if (ct.includes("multipart/form-data")) {
       const file = (await req.formData()).get("image");
       if (!(file instanceof File)) return jsonError('Send the photo as multipart field "image"', 400);
-      const saved = await saveImage(file);
-      ({ bytes, mediaType, url: imageUrl } = saved);
+      ({ bytes, mediaType, url: imageUrl } = await saveImage(file));
     } else {
       const body = await req.json().catch(() => null);
-      const url = String(body?.imageUrl ?? "");
-      const m = url.match(/\/uploads\/([A-Za-z0-9._-]+)$/);
-      if (!m) return jsonError("imageUrl must be a url returned by /api/shop/uploads", 400);
-      const ext = m[1].split(".").pop() || "";
-      mediaType = EXT_TYPES[ext];
-      if (!mediaType || !Object.keys(ALLOWED).includes(mediaType)) return jsonError("Unsupported image type", 400);
-      bytes = await readFile(path.join(UPLOAD_DIR, m[1])).catch(() => {
-        throw new Error("Image not found");
-      });
-      imageUrl = `/uploads/${m[1]}`;
+      imageUrl = String(body?.imageUrl ?? "");
+      ({ bytes, mediaType } = await loadImage(imageUrl));
     }
   } catch (e) {
-    return jsonError((e as Error).message, 400);
+    if (e instanceof UploadError) return jsonError(e.message, 400);
+    console.error("image load/save failed", e);
+    return jsonError("Could not save the photo, please try again", 502);
   }
 
   try {

@@ -32,7 +32,25 @@ Edit `src/lib/brand.ts` (name, tagline, support phone, delivery fee). Logo mark 
 
 Errors are `{error}` with an HTTP status. Prices are integer PKR.
 
-## Going to production
-1. In `prisma/schema.prisma` set `provider = "postgresql"`, point `DATABASE_URL` at Postgres (Neon, Supabase, RDS), run `npx prisma db push`.
-2. Move uploads from local disk (`src/lib/uploads.ts`) to S3 / Cloudflare R2 / Cloudinary if hosting on Vercel.
-3. Set a strong `ADMIN_PASSWORD` and `ANTHROPIC_API_KEY`.
+## Product photo storage
+Photos uploaded from the shopkeeper app are stored by `src/lib/uploads.ts`, which picks a backend from the environment:
+
+| Backend | Turn it on with | Notes |
+|---|---|---|
+| Vercel Blob (recommended on Vercel) | `BLOB_READ_WRITE_TOKEN` | In Vercel: project → Storage → Create → Blob → connect to this project. The token is added for you. |
+| Cloudinary | `CLOUDINARY_URL=cloudinary://KEY:SECRET@CLOUD_NAME` | From the Cloudinary dashboard ("API environment variable"). |
+| Local disk (development) | neither set | Saved to `UPLOAD_DIR` (default `./uploads`) and served at `/uploads/<name>`. Does not work on Vercel. |
+
+Set `STORAGE_DRIVER` to force one, and `UPLOAD_FOLDER` (default `products`) to choose the folder.
+Cloud backends return absolute `https://` image URLs; local disk returns `/uploads/...`. Uploads are limited to 4 MB (Vercel's request limit is 4.5 MB).
+
+## Deploy to Vercel
+This repository is a monorepo, so in Vercel set **Root Directory = `web`** when importing the project
+(Project → Settings → Build and Deployment → Root Directory). `web/vercel.json` sets the framework,
+build command and the Mumbai region (closest to Pakistan).
+
+1. Database: in `prisma/schema.prisma` set `provider = "postgresql"` and set `DATABASE_URL` to a Postgres database
+   (Vercel → Storage → Neon is easiest). Run `npx prisma db push` once, and `npm run db:seed` if you want demo data.
+2. Photos: connect a Vercel Blob store (or set `CLOUDINARY_URL`).
+3. Environment variables: `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ANTHROPIC_API_KEY`, plus the storage variable.
+4. To keep the site private before launch, turn on Vercel Authentication (Settings → Deployment Protection).

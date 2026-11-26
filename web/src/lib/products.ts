@@ -3,6 +3,12 @@ import type { Product } from "@prisma/client";
 import { db } from "./db";
 import { parseJSON, randomSuffix, slugify } from "./util";
 import { CONDITIONS } from "./orders";
+import { isOwnImageUrl } from "./uploads";
+
+const imageUrl = z
+  .string()
+  .max(500)
+  .refine((u) => isOwnImageUrl(u) || /^\/seed\/[A-Za-z0-9._-]+$/.test(u), "use an image url returned by /api/shop/uploads");
 
 export const productInput = z.object({
   title: z.string().trim().min(3).max(200),
@@ -15,7 +21,7 @@ export const productInput = z.object({
   price: z.coerce.number().int().positive(),
   comparePrice: z.coerce.number().int().positive().nullish(),
   stock: z.coerce.number().int().min(0).default(1),
-  images: z.array(z.string().max(500)).max(10).default([]),
+  images: z.array(imageUrl).max(10).default([]),
   status: z.enum(["active", "draft", "archived"]).default("active"),
 });
 

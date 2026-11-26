@@ -3,7 +3,7 @@
 Multi-vendor marketplace for tech products by Catalyst Solutions. Shops from Hafeez Center / Hall Road
 get a virtual shop; their products appear on one storefront. Customers never see the shop; the admin does.
 
-Stack: Next.js 15 (App Router) · Prisma · SQLite in dev (Postgres in prod) · Tailwind CSS 4.
+Stack: Next.js 16 (App Router) · Prisma · PostgreSQL · Tailwind CSS 4.
 
 ## Run locally
 You need Node 20+ and a Postgres database (a free Neon database works, or local Postgres).

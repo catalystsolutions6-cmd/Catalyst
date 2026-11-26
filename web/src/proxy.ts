@@ -16,4 +16,4 @@ export function proxy(req: NextRequest) {
   return res;
 }
 
-export const config = { matcher: ["/api/:path*", "/uploads/:path*"] };
+export const config = { matcher: ["/api/:path*", "/uploads/:path*", "/media/:path*"] };

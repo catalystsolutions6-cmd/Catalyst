@@ -7,7 +7,7 @@ Stack: Next.js 15 (App Router) · Prisma · SQLite in dev (Postgres in prod) · 
 
 ## Run locally
 ```bash
-cp .env.example .env      # set ADMIN_PASSWORD and ANTHROPIC_API_KEY
+cp .env.example .env      # set ADMIN_PASSWORD and GEMINI_API_KEY (free)
 npm install
 npm run setup             # creates the database and loads demo shops/products
 npm run dev               # http://localhost:3000
@@ -32,6 +32,13 @@ Edit `src/lib/brand.ts` (name, tagline, support phone, delivery fee). Logo mark 
 
 Errors are `{error}` with an HTTP status. Prices are integer PKR.
 
+## AI photo-to-listing (free)
+`src/lib/analyze.ts` sends the shopkeeper's photo to Google Gemini and gets back title, description, category,
+brand, model, condition and specs. Gemini's free tier needs no card: create a key at
+https://aistudio.google.com/apikey and set `GEMINI_API_KEY`. Without a key the analyze endpoint returns 503 and the
+shopkeeper fills the listing in by hand. The free tier has daily limits (see https://aistudio.google.com/rate-limit);
+when they run out the app shows "Free AI limit reached" and the shopkeeper can type the details.
+
 ## Product photo storage
 Photos uploaded from the shopkeeper app are stored by `src/lib/uploads.ts`, which picks a backend from the environment:
 
@@ -52,5 +59,5 @@ build command and the Mumbai region (closest to Pakistan).
 1. Database: in `prisma/schema.prisma` set `provider = "postgresql"` and set `DATABASE_URL` to a Postgres database
    (Vercel → Storage → Neon is easiest). Run `npx prisma db push` once, and `npm run db:seed` if you want demo data.
 2. Photos: connect a Vercel Blob store (or set `CLOUDINARY_URL`).
-3. Environment variables: `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ANTHROPIC_API_KEY`, plus the storage variable.
+3. Environment variables: `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `GEMINI_API_KEY`, plus the storage variable.
 4. To keep the site private before launch, turn on Vercel Authentication (Settings → Deployment Protection).

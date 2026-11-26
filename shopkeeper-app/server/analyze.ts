@@ -1,15 +1,12 @@
 /**
- * Product photo -> listing draft, using Claude vision.
+ * Product photo -> listing draft, using Google Gemini (free tier works).
  *
- * Drop-in module for the marketplace backend (copy to src/lib/analyze.ts).
- * Reads ANTHROPIC_API_KEY from the environment. Depends only on @anthropic-ai/sdk and zod.
- *
+ * Get a free key at https://aistudio.google.com/apikey and set GEMINI_API_KEY.
  * Optional env:
- *   ANALYZE_MODEL   (default "claude-opus-5-5")
- *   ANALYZE_EFFORT  low | medium | high (default "low": a shopkeeper is waiting on this)
+ *   GEMINI_MODEL  (default "gemini-flash-latest", Google's alias for the newest Flash model;
+ *                  falls back to "gemini-2.5-flash" if the alias is unavailable)
+ * Uses the Gemini REST API directly (no SDK). Depends only on zod.
  */
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 
 export const CATEGORY_SLUGS = [
@@ -49,14 +46,14 @@ export class AnalyzeError extends Error {
   }
 }
 
-const SUPPORTED_MEDIA = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const SUPPORTED_MEDIA = ["image/jpeg", "image/png", "image/webp"] as const;
 type SupportedMedia = (typeof SUPPORTED_MEDIA)[number];
-const MAX_BYTES = 5 * 1024 * 1024; // API limit per image (base64 adds ~33%, still under request cap)
+const MAX_BYTES = 5 * 1024 * 1024;
+const TIMEOUT_MS = 45_000;
+const FALLBACK_MODEL = "gemini-2.5-flash";
 
 const DraftSchema = z.object({
-  is_product: z
-    .boolean()
-    .describe("false if the photo does not show a sellable tech product"),
+  is_product: z.boolean(),
   title: z.string(),
   description: z.string(),
   category_slug: z.enum(CATEGORY_SLUGS),
@@ -66,6 +63,27 @@ const DraftSchema = z.object({
   specs: z.array(z.object({ name: z.string(), value: z.string() })),
   confidence: z.number(),
 });
+
+// Same shape as DraftSchema, in the OpenAPI subset Gemini's responseSchema accepts.
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    is_product: { type: "BOOLEAN", description: "false if the photo does not show a sellable tech product" },
+    title: { type: "STRING" },
+    description: { type: "STRING" },
+    category_slug: { type: "STRING", enum: [...CATEGORY_SLUGS] },
+    brand: { type: "STRING" },
+    model: { type: "STRING" },
+    condition: { type: "STRING", enum: ["new", "used", "refurbished"] },
+    specs: {
+      type: "ARRAY",
+      items: { type: "OBJECT", properties: { name: { type: "STRING" }, value: { type: "STRING" } }, required: ["name", "value"] },
+    },
+    confidence: { type: "NUMBER" },
+  },
+  required: ["is_product", "title", "description", "category_slug", "brand", "model", "condition", "specs", "confidence"],
+  propertyOrdering: ["is_product", "title", "category_slug", "brand", "model", "condition", "specs", "description", "confidence"],
+};
 
 const SYSTEM_PROMPT = `You write product listings for a Pakistani online marketplace that sells only tech products (laptops, desktops, monitors/LCDs, headphones, accessories, gaming gear, storage, networking, mobiles and tablets). Shopkeepers in Lahore electronics markets photograph an item with their phone and you draft the listing from the photo. The shopkeeper reviews and edits it before it goes live, and sets the price themselves.
 
@@ -81,82 +99,75 @@ Fields:
 - confidence: 0 to 1, how sure you are of the exact brand and model.
 - is_product: false if the photo shows no sellable tech product (then fill the other fields with your best guess or empty strings).`;
 
-let client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new AnalyzeError("AI is not configured (ANTHROPIC_API_KEY missing)", 503);
-  }
-  client ??= new Anthropic();
-  return client;
+type GeminiResponse = {
+  candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
+  promptFeedback?: { blockReason?: string };
+  error?: { code?: number; message?: string; status?: string };
+};
+
+async function callGemini(model: string, key: string, mediaType: SupportedMedia, base64: string) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": key },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [
+        {
+          role: "user",
+          parts: [{ inlineData: { mimeType: mediaType, data: base64 } }, { text: "Draft the listing for this product photo." }],
+        },
+      ],
+      generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0.2 },
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
+  return { status: res.status, data };
 }
 
-export async function analyzeProductImage(input: {
-  bytes: Buffer;
-  mediaType: string;
-}): Promise<ListingDraft> {
+export async function analyzeProductImage(input: { bytes: Buffer; mediaType: string }): Promise<ListingDraft> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new AnalyzeError("AI is not configured (GEMINI_API_KEY missing)", 503);
+
   const mediaType = input.mediaType.toLowerCase().replace("image/jpg", "image/jpeg");
   if (!SUPPORTED_MEDIA.includes(mediaType as SupportedMedia)) {
     throw new AnalyzeError(`Unsupported image type: ${input.mediaType}`, 415);
   }
   if (input.bytes.length === 0) throw new AnalyzeError("Empty image", 400);
-  if (input.bytes.length > MAX_BYTES) {
-    throw new AnalyzeError("Image is larger than 5 MB, please resize before upload", 413);
-  }
+  if (input.bytes.length > MAX_BYTES) throw new AnalyzeError("Image is larger than 5 MB, please resize before upload", 413);
 
-  const effort = (process.env.ANALYZE_EFFORT ?? "low") as "low" | "medium" | "high";
-
-  let response;
+  const base64 = input.bytes.toString("base64");
+  const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+  let r;
   try {
-    response = await getClient().beta.messages.parse({
-      model: process.env.ANALYZE_MODEL ?? "claude-opus-5-5",
-      max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      // If a safety classifier declines, the API retries on a fallback model in the same call.
-      fallbacks: "default",
-      output_config: { effort, format: betaZodOutputFormat(DraftSchema) },
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType as SupportedMedia,
-                data: input.bytes.toString("base64"),
-              },
-            },
-            { type: "text", text: "Draft the listing for this product photo." },
-          ],
-        },
-      ],
-    });
+    r = await callGemini(model, key, mediaType as SupportedMedia, base64);
+    if (r.status === 404 && model !== FALLBACK_MODEL) r = await callGemini(FALLBACK_MODEL, key, mediaType as SupportedMedia, base64);
   } catch (err) {
-    if (err instanceof AnalyzeError) throw err;
-    if (err instanceof Anthropic.RateLimitError) {
-      throw new AnalyzeError("AI is busy, please try again in a moment", 429);
-    }
-    if (err instanceof Anthropic.BadRequestError) {
-      throw new AnalyzeError("The photo could not be read, please retake it", 400);
-    }
-    if (err instanceof Anthropic.APIError) {
-      throw new AnalyzeError("AI service error, please try again", 502);
-    }
-    throw err; // network errors etc. surface as 500
+    if ((err as Error).name === "TimeoutError") throw new AnalyzeError("AI took too long, please try again", 504);
+    throw new AnalyzeError("Could not reach the AI service, please try again", 502);
   }
 
-  if (response.stop_reason === "refusal") {
-    throw new AnalyzeError("This photo could not be processed, please fill the listing manually", 422);
+  const { status, data } = r;
+  if (status === 429) throw new AnalyzeError("Free AI limit reached for now, please try again in a minute", 429);
+  if (status === 400 && /api key/i.test(data.error?.message || "")) throw new AnalyzeError("AI key is invalid (check GEMINI_API_KEY)", 503);
+  if (status === 401 || status === 403) throw new AnalyzeError("AI key is invalid or not allowed (check GEMINI_API_KEY)", 503);
+  if (status === 400) throw new AnalyzeError("The photo could not be read, please retake it", 400);
+  if (status !== 200) throw new AnalyzeError("AI service error, please try again", 502);
+  if (data.promptFeedback?.blockReason) throw new AnalyzeError("This photo could not be processed, please fill the listing manually", 422);
+
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  let parsed;
+  try {
+    parsed = DraftSchema.safeParse(JSON.parse(text));
+  } catch {
+    parsed = null;
   }
-  const out = response.parsed_output;
-  if (!out) throw new AnalyzeError("AI returned an incomplete result, please try again", 502);
-  if (!out.is_product) {
-    throw new AnalyzeError("No product found in the photo, please retake it closer", 422);
-  }
+  if (!parsed?.success) throw new AnalyzeError("AI returned an incomplete result, please try again", 502);
+  const out = parsed.data;
+  if (!out.is_product) throw new AnalyzeError("No product found in the photo, please retake it closer", 422);
 
   const specs: Record<string, string> = {};
-  for (const { name, value } of out.specs) {
+  for (const { name, value } of out.specs.slice(0, 12)) {
     if (name.trim() && value.trim()) specs[name.trim()] = value.trim();
   }
 

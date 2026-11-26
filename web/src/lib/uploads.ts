@@ -5,9 +5,7 @@
  *   - Local disk    otherwise (development only; files go to UPLOAD_DIR and are served at /uploads/<name>)
  * Force one with STORAGE_DRIVER=vercel-blob | cloudinary | local.
  */
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { createHash } from "crypto";
-import path from "path";
+
 import { put } from "@vercel/blob";
 import { randomSuffix } from "./util";
 

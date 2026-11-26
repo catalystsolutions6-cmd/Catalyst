@@ -11,7 +11,7 @@ import path from "path";
 import { put } from "@vercel/blob";
 import { randomSuffix } from "./util";
 
-export const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || "./uploads");
+export const UPLOAD_DIR = process.env.UPLOAD_DIR || "/tmp";
 export const UPLOAD_FOLDER = (process.env.UPLOAD_FOLDER || "products").replace(/[^a-zA-Z0-9/_-]/g, "");
 // Vercel functions accept request bodies up to 4.5 MB, so keep uploads under that.
 export const MAX_UPLOAD = 4 * 1024 * 1024;
@@ -78,63 +78,5 @@ export async function saveImage(file: File) {
       // The Blob SDK retries on network errors, so cap the whole call, not just one attempt.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), STORAGE_TIMEOUT_MS);
-      const blob = await Promise.race([
-        put(`${UPLOAD_FOLDER}/${base}.${ext}`, bytes, { access: "public", contentType: mediaType, abortSignal: controller.signal }),
-        new Promise<never>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Vercel Blob upload timed out")))),
-      ]).finally(() => clearTimeout(timer));
-      url = blob.url;
-      break;
-    }
-    case "cloudinary":
-      url = await uploadCloudinary(bytes, mediaType, base);
-      break;
-    default:
-      await mkdir(UPLOAD_DIR, { recursive: true });
-      await writeFile(path.join(UPLOAD_DIR, `${base}.${ext}`), bytes);
-      url = `/uploads/${base}.${ext}`;
-  }
-  return { url, bytes, mediaType };
-}
-
-/** True if this URL points at our own image storage (so the server may fetch it). */
-export function isOwnImageUrl(url: string) {
-  if (/^\/uploads\/[A-Za-z0-9._-]+$/.test(url)) return true;
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "https:") return false;
-  if (u.hostname.endsWith(".public.blob.vercel-storage.com")) return true;
-  if (u.hostname === "res.cloudinary.com" && process.env.CLOUDINARY_URL) {
-    try {
-      return u.pathname.startsWith(`/${cloudinaryConfig().cloudName}/`);
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-/** Reads back an image previously returned by saveImage. */
-export async function loadImage(url: string): Promise<{ bytes: Buffer; mediaType: string }> {
-  if (!isOwnImageUrl(url)) throw new UploadError("imageUrl must be a url returned by /api/shop/uploads");
-  const local = url.match(/^\/uploads\/([A-Za-z0-9._-]+)$/);
-  if (local) {
-    const mediaType = EXT_TYPES[local[1].split(".").pop()?.toLowerCase() || ""];
-    if (!mediaType) throw new UploadError("Unsupported image type");
-    const bytes = await readFile(path.join(UPLOAD_DIR, local[1])).catch(() => {
-      throw new UploadError("Image not found");
-    });
-    return { bytes, mediaType };
-  }
-  const res = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS) });
-  if (!res.ok) throw new UploadError("Image not found");
-  const mediaType = (res.headers.get("content-type") || "").split(";")[0].trim();
-  if (!ALLOWED[mediaType]) throw new UploadError("Unsupported image type");
-  const len = Number(res.headers.get("content-length") || 0);
-  if (len > MAX_UPLOAD * 2) throw new UploadError("Image is too large");
-  const bytes = Buffer.from(await res.arrayBuffer());
-  return { bytes, mediaType };
+      const blob = await Promise.race(
 }

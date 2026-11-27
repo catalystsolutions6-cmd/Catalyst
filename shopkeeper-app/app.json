@@ -21,6 +21,9 @@
       "package": "com.catalystsolutions.seller",
       "permissions": [
         "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -39,13 +42,21 @@
         "expo-image-picker",
         {
           "cameraPermission": "Allow the app to use your camera to photograph products for listings.",
-          "photosPermission": "Allow the app to pick product photos from your gallery."
+          "photosPermission": "Allow the app to pick product photos from your gallery.",
+          "microphonePermission": false
         }
       ]
     ],
     "scheme": "catalystseller",
     "extra": {
-      "apiUrl": "http://10.0.2.2:4000"
-    }
+      "apiUrl": "https://catalyst-37cd.vercel.app",
+      "router": {
+        "asyncRoutes": false
+      },
+      "eas": {
+        "projectId": "7493a001-e0bb-4229-9665-f4e4e826aa53"
+      }
+    },
+    "owner": "catalystsolutions"
   }
 }

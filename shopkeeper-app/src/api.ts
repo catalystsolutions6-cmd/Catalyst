@@ -84,20 +84,41 @@ export function imageUrl(url: string): string {
   return /^(https?:\/\/|file:|data:|blob:)/.test(url) ? url : `${API_URL}${url}`;
 }
 
-async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
-  if (init.body && !(init.body instanceof FormData)) headers["Content-Type"] = "application/json";
+type RawResponse = { status: number; data: unknown };
 
+function parseJson(text: string): unknown {
+  try {
+    return text.trim() ? JSON.parse(text) : null;
+  } catch {
+    return null; // empty or non-JSON body
+  }
+}
+
+/**
+ * Photo uploads on Android/iOS go through XMLHttpRequest. Expo replaces the global fetch with
+ * expo/fetch, which rejects React Native's {uri, name, type} file parts ("Unsupported FormDataPart
+ * implementation"). XMLHttpRequest still uses React Native's own networking, which streams the file
+ * straight from disk.
+ */
+function xhrSend(url: string, body: FormData, headers: Record<string, string>, timeoutMs: number): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.timeout = timeoutMs;
+    xhr.onload = () => resolve({ status: xhr.status, data: parseJson(xhr.responseText ?? "") });
+    xhr.ontimeout = () => reject(new ApiError("The server took too long to answer. Please try again.", 408));
+    xhr.onerror = () => reject(new ApiError("No internet connection, or the server is not reachable.", 0));
+    xhr.send(body);
+  });
+}
+
+async function fetchSend(url: string, init: RequestInit, headers: Record<string, string>, timeoutMs: number): Promise<RawResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, {
-      ...init,
-      headers: { ...headers, ...(init.headers as Record<string, string>) },
-      signal: controller.signal,
-    });
+    const res = await fetch(url, { ...init, headers, signal: controller.signal });
+    return { status: res.status, data: parseJson(await res.text()) };
   } catch (e) {
     if (controller.signal.aborted) {
       throw new ApiError("The server took too long to answer. Please try again.", 408);
@@ -107,21 +128,29 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 3000
   } finally {
     clearTimeout(timer);
   }
+}
 
-  let data: unknown = null;
-  try {
-    data = await res.json();
-  } catch {
-    // empty or non-JSON body
-  }
-  if (!res.ok) {
-    if (res.status === 401 && path !== "/api/shop/auth/login") onUnauthorized?.();
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const isForm = init.body instanceof FormData;
+  if (init.body && !isForm) headers["Content-Type"] = "application/json";
+  Object.assign(headers, init.headers as Record<string, string> | undefined);
+
+  const url = `${API_URL}${path}`;
+  const { status, data } =
+    isForm && Platform.OS !== "web"
+      ? await xhrSend(url, init.body as FormData, headers, timeoutMs)
+      : await fetchSend(url, init, headers, timeoutMs);
+
+  if (status < 200 || status >= 300) {
+    if (status === 401 && path !== "/api/shop/auth/login") onUnauthorized?.();
     const fallback =
-      res.status === 504 || res.status === 502 || res.status === 503
+      status === 504 || status === 502 || status === 503
         ? "The server is busy or took too long. Please try again in a moment."
-        : `Something went wrong (${res.status})`;
+        : `Something went wrong (${status})`;
     const msg = (data as { error?: string } | null)?.error ?? fallback;
-    throw new ApiError(msg, res.status);
+    throw new ApiError(msg, status);
   }
   return data as T;
 }

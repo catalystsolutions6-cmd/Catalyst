@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { ADMIN_COOKIE, createSession, getAdmin } from "@/lib/auth";
 import { slugify, randomSuffix } from "@/lib/util";
-import { ORDER_STATUSES } from "@/lib/orders";
+import { ITEM_STATUSES, ORDER_STATUSES } from "@/lib/orders";
 
 async function requireAdmin() {
   if (!(await getAdmin())) redirect("/admin/login");
@@ -94,7 +94,8 @@ export async function setOrderStatus(orderId: string, status: string) {
     } else if (order.status === "cancelled" && status !== "cancelled") {
       for (const i of order.items) await tx.product.update({ where: { id: i.productId }, data: { stock: { decrement: i.quantity } } });
     }
-    await tx.order.update({ where: { id: orderId }, data: { status } });
+    const firstConfirm = status === "confirmed" && !order.confirmedAt;
+    await tx.order.update({ where: { id: orderId }, data: { status, ...(firstConfirm ? { confirmedAt: new Date() } : {}) } });
   });
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
@@ -102,7 +103,7 @@ export async function setOrderStatus(orderId: string, status: string) {
 
 export async function setItemStatus(itemId: string, status: string) {
   await requireAdmin();
-  if (!["pending", "collected", "cancelled"].includes(status)) return;
+  if (!ITEM_STATUSES.includes(status as never)) return;
   const item = await db.orderItem.update({ where: { id: itemId }, data: { status } });
   revalidatePath(`/admin/orders/${item.orderId}`);
 }

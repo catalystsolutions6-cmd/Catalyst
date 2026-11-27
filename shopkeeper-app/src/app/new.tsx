@@ -71,7 +71,9 @@ export default function NewListing() {
     setPhase("analyzing");
     setAiError(null);
     try {
-      const d = await api.analyze(await analysisCopy(uri));
+      // Reuse the photo upload that started when the picture was taken; fall back to sending a small copy.
+      const uploaded = await uploads.current.get(uri)?.catch(() => undefined);
+      const d = uploaded ? await api.analyze(uri, uploaded) : await api.analyze(await analysisCopy(uri));
       setForm((f) => ({
         ...f,
         title: d.title,

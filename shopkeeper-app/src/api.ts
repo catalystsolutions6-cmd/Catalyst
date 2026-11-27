@@ -98,11 +98,12 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 3000
       headers: { ...headers, ...(init.headers as Record<string, string>) },
       signal: controller.signal,
     });
-  } catch {
+  } catch (e) {
     if (controller.signal.aborted) {
       throw new ApiError("The server took too long to answer. Please try again.", 408);
     }
-    throw new ApiError("No internet connection, or the server is not reachable.", 0);
+    const detail = e instanceof Error && e.message ? ` (${e.message})` : "";
+    throw new ApiError(`No internet connection, or the server is not reachable.${detail}`, 0);
   } finally {
     clearTimeout(timer);
   }
@@ -148,8 +149,30 @@ const realApi = {
   categories: () => request<Category[]>("/api/categories"),
   uploadImage: async (localUri: string) =>
     request<{ url: string }>("/api/shop/uploads", { method: "POST", body: await imageForm(localUri) }, 60000),
-  analyze: async (localUri: string) =>
-    request<ListingDraft>("/api/shop/listings/analyze", { method: "POST", body: await imageForm(localUri) }, 90000),
+  /**
+   * Prefers the already-uploaded photo (small JSON request) and falls back to sending the file.
+   * ?stream=1 makes the server send keep-alive spaces while the AI works, so slow answers
+   * are not cut off by the network; errors then arrive in the body as {error, status}.
+   */
+  analyze: async (localUri: string, uploadedUrl?: string) => {
+    const once = async () => {
+      const body = uploadedUrl ? JSON.stringify({ imageUrl: uploadedUrl }) : await imageForm(localUri);
+      const d = await request<ListingDraft & { error?: string; status?: number }>(
+        "/api/shop/listings/analyze?stream=1",
+        { method: "POST", body },
+        90000,
+      );
+      if (d && typeof d.error === "string") throw new ApiError(d.error, d.status ?? 502);
+      return d as ListingDraft;
+    };
+    try {
+      return await once();
+    } catch (e) {
+      // One automatic retry when the connection dropped.
+      if (e instanceof ApiError && e.status === 0) return once();
+      throw e;
+    }
+  },
   listProducts: () => request<Product[]>("/api/shop/products"),
   createProduct: (p: ProductInput) =>
     request<Product>("/api/shop/products", { method: "POST", body: JSON.stringify(p) }),

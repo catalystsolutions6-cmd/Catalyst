@@ -1,7 +1,7 @@
 "use client";
 import { useState, useTransition } from "react";
 import { resetShopPassword, setItemStatus, setOrderStatus, setProductStatus, toggleShop } from "@/app/admin/actions";
-import { ORDER_STATUSES } from "@/lib/orders";
+import { ITEM_STATUSES, ITEM_STATUS_LABELS, ORDER_STATUSES } from "@/lib/orders";
 
 export function OrderStatusSelect({ orderId, status }: { orderId: string; status: string }) {
   const [pending, start] = useTransition();
@@ -16,9 +16,7 @@ export function ItemStatusSelect({ itemId, status }: { itemId: string; status: s
   const [pending, start] = useTransition();
   return (
     <select className="input w-auto py-1 text-xs" defaultValue={status} disabled={pending} onChange={(e) => start(() => setItemStatus(itemId, e.target.value))}>
-      <option value="pending">To collect</option>
-      <option value="collected">Collected</option>
-      <option value="cancelled">Cancelled</option>
+      {ITEM_STATUSES.map((s) => <option key={s} value={s}>{ITEM_STATUS_LABELS[s]}</option>)}
     </select>
   );
 }

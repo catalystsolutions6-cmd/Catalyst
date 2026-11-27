@@ -48,6 +48,30 @@ export interface Product extends ProductInput {
   createdAt?: string;
 }
 
+export type OrderStatus = "pending" | "packed" | "ready" | "collected" | "cancelled";
+export interface ShopOrderItem {
+  id: string;
+  title: string;
+  image: string | null;
+  price: number;
+  quantity: number;
+  status: OrderStatus;
+}
+/** An order as one shop sees it: only its own items, shown once the platform has confirmed it with the customer. */
+export interface ShopOrder {
+  id: string;
+  orderNumber: string;
+  orderStatus: string;
+  status: OrderStatus;
+  createdAt: string;
+  confirmedAt: string | null;
+  city: string;
+  items: ShopOrderItem[];
+  total: number;
+  commissionPercent: number;
+  payout: number;
+}
+
 export const FALLBACK_CATEGORIES: Category[] = [
   { slug: "laptops", name: "Laptops" },
   { slug: "desktops", name: "Desktops" },
@@ -203,6 +227,10 @@ const realApi = {
     }
   },
   listProducts: () => request<Product[]>("/api/shop/products"),
+  listOrders: () => request<ShopOrder[]>("/api/shop/orders"),
+  getOrder: (id: string) => request<ShopOrder>(`/api/shop/orders/${id}`),
+  setOrderStatus: (id: string, status: "pending" | "packed" | "ready") =>
+    request<ShopOrder>(`/api/shop/orders/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
   createProduct: (p: ProductInput) =>
     request<Product>("/api/shop/products", { method: "POST", body: JSON.stringify(p) }),
   updateProduct: (id: string, patch: Partial<ProductInput>) =>

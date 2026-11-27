@@ -6,6 +6,8 @@ export function StatusBadge({ status }: { status: string }) {
     delivered: "bg-green-100 text-green-800",
     cancelled: "bg-red-100 text-red-700",
     collected: "bg-green-100 text-green-800",
+    packed: "bg-sky-100 text-sky-800",
+    ready: "bg-violet-100 text-violet-800",
     active: "bg-green-100 text-green-800",
     draft: "bg-slate-200 text-slate-700",
     archived: "bg-red-100 text-red-700",

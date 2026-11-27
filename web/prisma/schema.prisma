@@ -74,6 +74,7 @@ model Order {
   shippingFee   Int
   total         Int
   createdAt     DateTime    @default(now())
+  confirmedAt   DateTime? // set when admin first confirms; from then on the shops see the order
   items         OrderItem[]
 }
 
@@ -89,7 +90,7 @@ model OrderItem {
   image     String?
   price     Int
   quantity  Int
-  status    String  @default("pending") // per-shop fulfilment: pending | collected | cancelled
+  status    String  @default("pending") // per-shop fulfilment: pending | packed | ready | collected | cancelled
 }
 
 model Session {

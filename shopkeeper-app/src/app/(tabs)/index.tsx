@@ -2,10 +2,10 @@ import { useCallback, useLayoutEffect, useState } from "react";
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from "react-native";
 import { router, useFocusEffect, useNavigation } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { api, imageUrl, type Product } from "../api";
-import { useAuth } from "../auth";
-import { productCache } from "../productCache";
-import { Button, C, formatPKR } from "../ui";
+import { api, imageUrl, type Product } from "../../api";
+import { useAuth } from "../../auth";
+import { productCache } from "../../productCache";
+import { Button, C, formatPKR } from "../../ui";
 
 export default function MyListings() {
   const { logout } = useAuth();
@@ -18,7 +18,7 @@ export default function MyListings() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <Pressable onPress={logout} hitSlop={10}>
+        <Pressable onPress={logout} hitSlop={10} style={{ marginRight: 16 }}>
           <Text style={{ color: C.primary, fontWeight: "600" }}>Log out</Text>
         </Pressable>
       ),
@@ -84,7 +84,7 @@ export default function MyListings() {
         }
         renderItem={({ item }) => <ProductRow product={item} />}
       />
-      <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: 16, paddingBottom: 6 + insets.bottom, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border }}>
+      <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: 16, paddingBottom: 6, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border }}>
         <Button title="Snap a product" icon="📷" onPress={() => router.push({ pathname: "/new", params: { source: "camera" } })} />
         <Pressable onPress={() => router.push({ pathname: "/new", params: { source: "gallery" } })} style={{ padding: 10 }}>
           <Text style={{ textAlign: "center", color: C.primary, fontWeight: "600" }}>or choose from gallery</Text>

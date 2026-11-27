@@ -24,9 +24,10 @@ function RootStack() {
       }}
     >
       <Stack.Protected guard={!!shop}>
-        <Stack.Screen name="index" options={{ title: shop?.name ?? "My shop" }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="new" options={{ title: "New listing" }} />
         <Stack.Screen name="product/[id]" options={{ title: "Edit listing" }} />
+        <Stack.Screen name="order/[id]" options={{ title: "Order" }} />
       </Stack.Protected>
       <Stack.Protected guard={!shop}>
         <Stack.Screen name="login" options={{ headerShown: false }} />
